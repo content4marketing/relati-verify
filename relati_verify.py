@@ -182,6 +182,56 @@ def _load_packet(path):
         return json.load(f)
 
 
+NETWORK_BY_LABEL = {"polygon-mainnet": "polygon", "polygon-amoy": "amoy"}
+
+
+def _is_bundle(doc):
+    return isinstance(doc, dict) and str(doc.get("formato", "")).startswith("relati-prova")
+
+
+def _verify_bundle(doc, rpc_override=None):
+    """Pacote de prova baixado do painel: verifica cada evidência (hash local
+    contra o registrado e, quando ancorada, contra a transação na Polygon)."""
+    failures = 0
+    evidencias = doc.get("evidencias", [])
+    if not evidencias:
+        sys.exit("pacote de prova sem evidências: nada a verificar.")
+    print(f"pacote de prova relati: {len(evidencias)} evidência(s)\n")
+    for i, ev in enumerate(evidencias, 1):
+        prova = ev.get("prova", {})
+        digest, _ = packet_hash(ev.get("pacote"))
+        expected = (prova.get("evidence_hash") or "").lower()
+        hash_ok = digest == expected
+        print(f"[{i}] evidência {ev.get('evidence_id', '?')}")
+        print(f"    hash canônico:  {digest}")
+        print(f"    hash registrado: {expected or '(ausente)'}  " + ("✓" if hash_ok else "✗ DIVERGIU"))
+        if not hash_ok:
+            failures += 1
+            continue
+        tx = prova.get("tx_hash")
+        if not tx:
+            print(f"    âncora: {prova.get('anchoring_status') or 'sem transação'} (nada a conferir on-chain)")
+            continue
+        network = NETWORK_BY_LABEL.get(prova.get("anchor_network") or "", "polygon")
+        result = check_anchor(rpc_override or RPC_DEFAULT[network], tx, digest)
+        if not result["found"]:
+            print(f"    âncora: transação NÃO encontrada ✗ ({EXPLORER[network]}{tx})")
+            failures += 1
+            continue
+        ok = result["hash_matches"]
+        print(f"    âncora: {EXPLORER[network]}{tx}")
+        print(f"    hash na blockchain confere: " + ("SIM ✓" if ok else "NÃO ✗"))
+        if result["timestamp_utc"]:
+            print(f"    ancorado em (UTC): {result['timestamp_utc']} (bloco {result['block_number']})")
+        if not ok:
+            failures += 1
+    print()
+    if failures:
+        print(f"VEREDITO: {failures} evidência(s) FALHARAM na verificação. ✗")
+        sys.exit(2)
+    print("VEREDITO: todas as evidências conferem com o registrado e ancorado. ✓")
+
+
 def cmd_hash(args):
     packet = _load_packet(args.packet)
     digest, canonical = packet_hash(packet)
@@ -212,6 +262,11 @@ def _print_anchor(result, network, tx):
 
 def cmd_verify(args):
     packet = _load_packet(args.packet)
+    if _is_bundle(packet):
+        _verify_bundle(packet, rpc_override=args.rpc)
+        return
+    if not args.tx:
+        sys.exit("Para um pacote avulso, informe --tx (o pacote de prova do painel dispensa).")
     digest, _ = packet_hash(packet)
     print(f"hash canônico (SHA-256): {digest}")
     result = check_anchor(_resolve_rpc(args), args.tx, digest)
@@ -271,8 +326,8 @@ def main():
     p.set_defaults(func=cmd_hash)
 
     p = sub.add_parser("verify", help="hash + âncora na Polygon")
-    p.add_argument("packet")
-    p.add_argument("--tx", required=True, help="hash da transação de ancoragem")
+    p.add_argument("packet", help="pacote de prova do painel OU pacote de evidência avulso")
+    p.add_argument("--tx", help="transação de ancoragem (só pra pacote avulso)")
     add_chain_args(p)
     p.set_defaults(func=cmd_verify)
 

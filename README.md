@@ -24,9 +24,24 @@ do termo lido, metadados da sessão), contendo apenas dados **mascarados**
 Qualquer alteração de um caractere no pacote muda o hash, e o hash gravado na
 blockchain é imutável.
 
+## Onde consigo o arquivo?
+
+No painel do Relati, no detalhe do consentimento de um relato, o gestor
+(cliente_admin) baixa o **pacote de prova**: botão "Baixar pacote de prova
+(.json)". O arquivo já vem com tudo: o pacote canônico de cada evidência e a
+prova (hash registrado, transação Polygon, rede, data da âncora). Um arquivo
+por relato; guarde onde quiser: ele não depende do Relati pra valer.
+
+```bash
+python3 relati_verify.py verify relati-prova-XXXXXXXX.json
+```
+
+O verificador confere cada evidência do arquivo: recalcula o hash canônico,
+compara com o registrado e confirma na blockchain (quando ancorada).
+
 ## Verificar não exige chave nenhuma
 
-Com o arquivo do pacote (JSON) e o hash da transação em mãos:
+Também dá pra verificar um pacote avulso, com o hash da transação em mãos:
 
 ```bash
 python3 relati_verify.py verify pacote.json --tx 0xTRANSACAO

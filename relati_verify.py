@@ -31,9 +31,24 @@ import math
 import sys
 import urllib.request
 
+# LISTA de endpoints por rede, consultados em ordem.
+#
+# Por que uma lista e nao um endpoint so: o `polygon-rpc.com` (que era o padrao
+# aqui) responde "transacao nao encontrada" para transacoes que EXISTEM, se o
+# no consultado ainda nao sincronizou ou nao guarda o historico. Num kit
+# pericial isso e o pior erro possivel: um falso negativo faz o perito concluir
+# que uma prova valida nao esta na blockchain. So se declara "nao encontrada"
+# depois que TODOS os endpoints concordarem.
 RPC_DEFAULT = {
-    "polygon": "https://polygon-rpc.com",
-    "amoy": "https://rpc-amoy.polygon.technology",
+    "polygon": [
+        "https://polygon-bor-rpc.publicnode.com",
+        "https://polygon.llamarpc.com",
+        "https://polygon-rpc.com",
+    ],
+    "amoy": [
+        "https://polygon-amoy-bor-rpc.publicnode.com",
+        "https://rpc-amoy.polygon.technology",
+    ],
 }
 EXPLORER = {
     "polygon": "https://polygonscan.com/tx/",
@@ -111,13 +126,39 @@ def rpc_call(url, method, params):
 
 
 def check_anchor(rpc_url, tx_hash, evidence_hash):
-    tx = rpc_call(rpc_url, "eth_getTransactionByHash", [tx_hash])
+    """Confere a ancora. `rpc_url` aceita um endpoint ou uma lista deles.
+
+    Com lista, o primeiro que ACHAR a transacao decide. "Nao encontrada" so e
+    devolvido quando todos concordam — e, nesse caso, `consultados` diz quantos
+    responderam, pra o perito saber que a conclusao nao veio de um no so.
+    """
+    urls = [rpc_url] if isinstance(rpc_url, str) else list(rpc_url)
+    tx = None
+    usada = None
+    consultados = 0
+    erros = []
+    for u in urls:
+        try:
+            tx = rpc_call(u, "eth_getTransactionByHash", [tx_hash])
+            consultados += 1
+        except Exception as e:  # noqa: BLE001 — endpoint fora do ar nao invalida a prova
+            erros.append(f"{u}: {e}")
+            continue
+        if tx:
+            usada = u
+            break
     if not tx:
-        return {"found": False}
+        return {
+            "found": False,
+            "endpoints_consultados": consultados,
+            "endpoints_com_erro": erros,
+        }
+    rpc_url = usada
     data = (tx.get("input") or "").lower()
     expected = "0x" + evidence_hash.lower().removeprefix("0x")
     result = {
         "found": True,
+        "rpc": rpc_url,
         "hash_matches": data == expected,
         "from": tx.get("from"),
         "to": tx.get("to"),
